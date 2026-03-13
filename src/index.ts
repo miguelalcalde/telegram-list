@@ -9,6 +9,7 @@ import { createTelegramAdapter, type TelegramAdapterMode } from "@chat-adapter/t
 interface Participant {
   userId: string;
   displayName: string;
+  seats: number;
 }
 
 interface EventList {
@@ -63,19 +64,31 @@ const bot = new Chat<{ telegram: typeof telegram }, BotThreadState>({
   state: stateAdapter,
 });
 
-function upsertParticipant(participants: Participant[], incoming: Participant): Participant[] {
+function addSeat(participants: Participant[], incoming: Omit<Participant, "seats">): Participant[] {
   const existing = participants.find((participant) => participant.userId === incoming.userId);
-  if (existing) {
-    return participants.map((participant) =>
-      participant.userId === incoming.userId ? incoming : participant,
-    );
+  if (!existing) {
+    return [...participants, { ...incoming, seats: 1 }];
   }
 
-  return [...participants, incoming];
+  return participants.map((participant) =>
+    participant.userId === incoming.userId
+      ? { ...participant, displayName: incoming.displayName, seats: participant.seats + 1 }
+      : participant,
+  );
 }
 
-function removeParticipant(participants: Participant[], userId: string): Participant[] {
-  return participants.filter((participant) => participant.userId !== userId);
+function removeSeat(participants: Participant[], userId: string): Participant[] {
+  return participants.flatMap((participant) => {
+    if (participant.userId !== userId) {
+      return [participant];
+    }
+
+    if (participant.seats <= 1) {
+      return [];
+    }
+
+    return [{ ...participant, seats: participant.seats - 1 }];
+  });
 }
 
 function renderEventList(list: EventList): string {
@@ -84,7 +97,8 @@ function renderEventList(list: EventList): string {
     lines.push("1. ");
   } else {
     list.coming.forEach((participant, index) => {
-      lines.push(`${index + 1}. ${participant.displayName}`);
+      const plusN = participant.seats > 1 ? ` (+${participant.seats - 1})` : "";
+      lines.push(`${index + 1}. ${participant.displayName}${plusN}`);
     });
   }
 
@@ -378,22 +392,22 @@ bot.onReaction(async (event) => {
   const participant: Participant = {
     userId: event.user.userId,
     displayName: mentionDisplayName(event.user),
+    seats: 1,
   };
 
   const alreadyInList = targetList.coming.some((existing) => existing.userId === participant.userId);
 
   // Idempotency:
-  // - Ignore repeated "add" reactions when user is already listed
-  // - Ignore repeated "remove" reactions when user is not listed
-  if ((event.added && alreadyInList) || (!event.added && !alreadyInList)) {
+  // - Ignore "remove" reactions when user is not listed
+  if (!event.added && !alreadyInList) {
     return;
   }
 
   const updatedList: EventList = {
     ...targetList,
     coming: event.added
-      ? upsertParticipant(removeParticipant(targetList.coming, participant.userId), participant)
-      : removeParticipant(targetList.coming, participant.userId),
+      ? addSeat(targetList.coming, participant)
+      : removeSeat(targetList.coming, participant.userId),
   };
 
   const nextState: BotThreadState = {

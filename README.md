@@ -10,6 +10,7 @@ A Telegram bot that creates one event message and keeps editing that same messag
    - Empty "coming" list (`1. `)
 3. Reactions on that message update it:
    - Any added reaction => user is added/updated in the list
+   - Extra reactions from the same user increase their count (`(+1)`, `(+2)`, ...)
    - Removing a reaction => user is removed from the list
    - No reaction => no changes
 
@@ -89,7 +90,9 @@ This supports multiple active lists in the same group because commands target th
 After list creation, membership is controlled only with reactions on the list message:
 
 - Add any reaction (`👍`, `🔥`, `✅`, etc.) => you are added to the list.
-- Remove that reaction => you are removed from the list.
+- Add more reactions yourself => increases your attendee count as `(+N)`.
+- Remove a reaction => decreases your count by one.
+- Remove your last reaction => you are removed from the list.
 
 Example flow:
 
@@ -105,6 +108,13 @@ Example flow:
 6. Bot updates back to:
    - `Birthday picnic`
    - `1. `
+
+Example with extra attendees:
+
+1. User C reacts once => `1. User C`
+2. User C reacts two more times (3 total) => `1. User C (+2)`
+3. User C removes one reaction => `1. User C (+1)`
+4. User C removes the remaining two => list entry for User C disappears
 
 ## Stack
 
