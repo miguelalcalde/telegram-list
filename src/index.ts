@@ -39,6 +39,11 @@ interface TelegramIncomingMessageRaw {
   reply_to_message?: TelegramReplyMessageRef;
 }
 
+interface TelegramMessageResult {
+  chat?: TelegramChatRef;
+  message_id: number;
+}
+
 const modeFromEnv = process.env.TELEGRAM_MODE as TelegramAdapterMode | undefined;
 const telegram = createTelegramAdapter({
   mode: modeFromEnv ?? "auto",
@@ -125,14 +130,92 @@ function resolveTargetListId(
   return fallback ?? null;
 }
 
+function parseCompositeMessageId(compositeId: string): { chatId: string; messageId: number } {
+  const idx = compositeId.lastIndexOf(":");
+  if (idx <= 0) {
+    throw new Error(`Invalid message id format: ${compositeId}`);
+  }
+
+  const chatId = compositeId.slice(0, idx);
+  const messageId = Number(compositeId.slice(idx + 1));
+  if (!Number.isFinite(messageId)) {
+    throw new Error(`Invalid message id number: ${compositeId}`);
+  }
+
+  return { chatId, messageId };
+}
+
+async function telegramApiCall<T>(method: string, payload: Record<string, unknown>): Promise<T> {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) {
+    throw new Error("TELEGRAM_BOT_TOKEN is required.");
+  }
+
+  const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const json = (await response.json()) as { ok: boolean; result?: T; description?: string };
+  if (!response.ok || !json.ok || !json.result) {
+    throw new Error(`${method} failed: ${json.description ?? `HTTP ${response.status}`}`);
+  }
+
+  return json.result;
+}
+
+async function sendListMessage(threadId: string, text: string): Promise<TelegramMessageResult> {
+  const { chatId, messageThreadId } = telegram.decodeThreadId(threadId);
+  const payload: Record<string, unknown> = {
+    chat_id: chatId,
+    text,
+    parse_mode: "Markdown",
+    disable_web_page_preview: true,
+  };
+  if (typeof messageThreadId === "number") {
+    payload.message_thread_id = messageThreadId;
+  }
+
+  try {
+    return await telegramApiCall<TelegramMessageResult>("sendMessage", payload);
+  } catch {
+    delete payload.parse_mode;
+    return telegramApiCall<TelegramMessageResult>("sendMessage", payload);
+  }
+}
+
+async function editListMessage(compositeMessageId: string, text: string): Promise<void> {
+  const { chatId, messageId } = parseCompositeMessageId(compositeMessageId);
+  const payload: Record<string, unknown> = {
+    chat_id: chatId,
+    message_id: messageId,
+    text,
+    parse_mode: "Markdown",
+    disable_web_page_preview: true,
+  };
+
+  try {
+    await telegramApiCall("editMessageText", payload);
+  } catch {
+    delete payload.parse_mode;
+    await telegramApiCall("editMessageText", payload);
+  }
+}
+
 async function pinTelegramMessage(raw: unknown): Promise<void> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) {
     return;
   }
 
-  const target = raw as Partial<TelegramPinTarget> | undefined;
-  if (!target?.chat_id || !target?.message_id) {
+  const target = raw as
+    | (Partial<TelegramPinTarget> & { chat?: TelegramChatRef })
+    | undefined;
+  const chatId = target?.chat_id ?? target?.chat?.id;
+  if (!chatId || !target?.message_id) {
     return;
   }
 
@@ -142,7 +225,7 @@ async function pinTelegramMessage(raw: unknown): Promise<void> {
       "content-type": "application/json",
     },
     body: JSON.stringify({
-      chat_id: target.chat_id,
+      chat_id: chatId,
       message_id: target.message_id,
       disable_notification: true,
     }),
@@ -249,18 +332,21 @@ bot.onNewMessage(/^\/(?:list|event)(?:@\w+)?(?:\s+[\s\S]*)?$/i, async (thread, m
     return;
   }
 
-  const sent = await thread.post(
+  const sent = await sendListMessage(
+    message.threadId,
     renderEventList({
       title,
       coming: [],
     }),
   );
+  const fallbackChatId = telegram.decodeThreadId(message.threadId).chatId;
+  const sentCompositeId = `${sent.chat?.id ?? fallbackChatId}:${sent.message_id}`;
 
   const previousState = ((await thread.state) as BotThreadState | null) ?? { eventLists: {} };
   const nextState: BotThreadState = {
     eventLists: {
       ...previousState.eventLists,
-      [sent.id]: {
+      [sentCompositeId]: {
         title,
         coming: [],
       },
@@ -269,7 +355,7 @@ bot.onNewMessage(/^\/(?:list|event)(?:@\w+)?(?:\s+[\s\S]*)?$/i, async (thread, m
   await thread.setState(nextState, { replace: true });
 
   try {
-    await pinTelegramMessage(sent.raw);
+    await pinTelegramMessage(sent);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.warn(`[telegram-list] could not pin list message: ${message}`);
@@ -322,7 +408,7 @@ bot.onReaction(async (event) => {
   }
 
   await event.thread.setState(nextState, { replace: true });
-  await event.adapter.editMessage(event.threadId, event.messageId, renderEventList(updatedList));
+  await editListMessage(event.messageId, renderEventList(updatedList));
 });
 
 bot.onNewMessage(/^\/(?:rename|update)(?:@\w+)?(?:\s+[\s\S]*)?$/i, async (thread, message) => {
@@ -358,7 +444,7 @@ bot.onNewMessage(/^\/(?:rename|update)(?:@\w+)?(?:\s+[\s\S]*)?$/i, async (thread
   };
 
   await thread.setState(nextState, { replace: true });
-  await telegram.editMessage(message.threadId, targetListId, renderEventList(updatedList));
+  await editListMessage(targetListId, renderEventList(updatedList));
 });
 
 bot.onNewMessage(/^\/(?:delete|remove)(?:@\w+)?$/i, async (thread, message) => {
