@@ -6,18 +6,75 @@ A Telegram bot that creates one event message and keeps editing that same messag
 
 1. Send `/list <event name>` (or `/event <event name>`).
 2. Bot posts:
-   - Event name in bold
+   - Event name
    - Empty "coming" list (`1. `)
 3. Reactions on that message update it:
-   - Positive reaction (`👍`, `✅`, `➕`, etc.) => added to "coming"
-   - Negative reaction (`👎`, `❌`, etc.) => moved to "Not coming"
+   - Any added reaction => user is added/updated in the list
+   - Removing a reaction => user is removed from the list
    - No reaction => no changes
+
+## Bot Commands
+
+The bot currently supports two text commands in Telegram chats:
+
+### 1) `/list <event name>`
+
+Creates a new list message for the event and pins it (if the bot has pin permission).
+
+Examples:
+
+```text
+/list Christmas dinner
+/list Team offsite planning
+/list@thelistingbot Friday padel
+```
+
+What happens:
+
+- Bot posts a message with the event title and an empty numbered list.
+- Users join by adding any reaction on that bot message.
+- Users leave by removing their reaction.
+
+### 2) `/event <event name>`
+
+Alias of `/list`. Same behavior and output.
+
+Examples:
+
+```text
+/event Christmas dinner
+/event Product sync lunch
+/event@thelistingbot Sunday brunch
+```
+
+## Reaction Controls (No Text Command Needed)
+
+After list creation, membership is controlled only with reactions on the list message:
+
+- Add any reaction (`👍`, `🔥`, `✅`, etc.) => you are added to the list.
+- Remove that reaction => you are removed from the list.
+
+Example flow:
+
+1. User A sends `/list Birthday picnic`
+2. Bot posts and pins:
+   - `Birthday picnic`
+   - `1. `
+3. User B reacts with `👍`
+4. Bot updates:
+   - `Birthday picnic`
+   - `1. User B`
+5. User B removes `👍`
+6. Bot updates back to:
+   - `Birthday picnic`
+   - `1. `
 
 ## Stack
 
 - [`chat`](https://www.npmjs.com/package/chat)
 - [`@chat-adapter/telegram`](https://www.npmjs.com/package/@chat-adapter/telegram)
-- [`@chat-adapter/state-memory`](https://www.npmjs.com/package/@chat-adapter/state-memory)
+- [`@chat-adapter/state-memory`](https://www.npmjs.com/package/@chat-adapter/state-memory) (fallback)
+- [`@chat-adapter/state-redis`](https://www.npmjs.com/package/@chat-adapter/state-redis) (recommended for persistence)
 - TypeScript + `tsx`
 
 ## Setup
@@ -39,6 +96,7 @@ cp env.example .env
 - `TELEGRAM_BOT_TOKEN` (required)
 - `TELEGRAM_WEBHOOK_SECRET_TOKEN` (recommended for webhook mode)
 - `TELEGRAM_BOT_USERNAME` (recommended for mention detection)
+- `REDIS_URL` (optional outside Docker; Docker Compose sets it automatically)
 
 ## Run
 
@@ -59,6 +117,7 @@ TELEGRAM_MODE=polling npm run dev
 ### Webhook mode
 
 ```bash
+npm run build
 TELEGRAM_MODE=webhook PORT=3000 npm run start
 ```
 
@@ -79,7 +138,46 @@ curl -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
   }'
 ```
 
+## Docker (bot + Redis)
+
+1. Prepare `.env`:
+
+```bash
+cp env.example .env
+```
+
+2. Set at least:
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_BOT_USERNAME`
+
+3. Start services:
+
+```bash
+docker compose up --build
+```
+
+This starts:
+- `bot` container (your Telegram bot)
+- `redis` container (persistent state backend)
+
+By default in Compose, bot uses:
+- `REDIS_URL=redis://redis:6379`
+- `TELEGRAM_MODE=polling`
+
+### Docker webhook mode
+
+Set `TELEGRAM_MODE=webhook` in `.env` (or export it), then:
+
+```bash
+docker compose up --build
+```
+
+Expose your server publicly and set Telegram webhook to:
+
+- `https://your-domain.com/api/webhooks/telegram`
+
 ## Notes
 
-- Per-thread list state is stored with Chat SDK thread state (currently backed by memory state adapter).
-- For production persistence across restarts, swap `@chat-adapter/state-memory` for Redis/Postgres state adapter.
+- If `REDIS_URL` is set, bot uses Redis state (recommended).
+- If `REDIS_URL` is not set, bot falls back to in-memory state.
+- Pinning list messages requires bot permissions in the group (admin pin rights).

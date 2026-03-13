@@ -3,6 +3,7 @@ import "dotenv/config";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { Chat } from "chat";
 import { createMemoryState } from "@chat-adapter/state-memory";
+import { createRedisState } from "@chat-adapter/state-redis";
 import { createTelegramAdapter, type TelegramAdapterMode } from "@chat-adapter/telegram";
 
 interface Participant {
@@ -32,12 +33,15 @@ const telegram = createTelegramAdapter({
   },
 });
 
+const redisUrl = process.env.REDIS_URL;
+const stateAdapter = redisUrl ? createRedisState({ url: redisUrl }) : createMemoryState();
+
 const bot = new Chat<{ telegram: typeof telegram }, BotThreadState>({
   userName: process.env.BOT_USERNAME ?? "telegram-list-bot",
   adapters: {
     telegram,
   },
-  state: createMemoryState(),
+  state: stateAdapter,
 });
 
 function upsertParticipant(participants: Participant[], incoming: Participant): Participant[] {
@@ -228,11 +232,6 @@ bot.onReaction(async (event) => {
     return;
   }
 
-  // Simpler rule: any added reaction means "coming".
-  if (!event.added) {
-    return;
-  }
-
   const state = (await event.thread.state) as BotThreadState | null;
   const targetList =
     state?.eventLists?.[event.messageId] ??
@@ -246,9 +245,20 @@ bot.onReaction(async (event) => {
     displayName: mentionDisplayName(event.user),
   };
 
+  const alreadyInList = targetList.coming.some((existing) => existing.userId === participant.userId);
+
+  // Idempotency:
+  // - Ignore repeated "add" reactions when user is already listed
+  // - Ignore repeated "remove" reactions when user is not listed
+  if ((event.added && alreadyInList) || (!event.added && !alreadyInList)) {
+    return;
+  }
+
   const updatedList: EventList = {
     ...targetList,
-    coming: upsertParticipant(removeParticipant(targetList.coming, participant.userId), participant),
+    coming: event.added
+      ? upsertParticipant(removeParticipant(targetList.coming, participant.userId), participant)
+      : removeParticipant(targetList.coming, participant.userId),
   };
 
   const nextState: BotThreadState = {
@@ -269,6 +279,7 @@ bot.onReaction(async (event) => {
 async function main(): Promise<void> {
   await bot.initialize();
   console.log(`[telegram-list] adapter mode: ${telegram.runtimeMode}`);
+  console.log(`[telegram-list] state backend: ${redisUrl ? "redis" : "memory"}`);
   console.log("[telegram-list] command: /list <event name>");
 
   if (telegram.runtimeMode === "webhook") {
