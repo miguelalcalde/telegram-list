@@ -47,6 +47,43 @@ Examples:
 /event@thelistingbot Sunday brunch
 ```
 
+### 3) `/rename <new title>` or `/update <new title>`
+
+Rename an existing list. Must be sent as a reply to the target list message.
+
+Examples:
+
+```text
+/rename Dinner at Maria's
+/update Christmas dinner final list
+/rename@thelistingbot Team lunch confirmed
+```
+
+Reply-based usage:
+
+1. Long-press the list message (the one created by bot)
+2. Tap Reply
+3. Send `/rename <new title>` (or `/update <new title>`)
+
+### 4) `/delete` or `/remove`
+
+Delete an existing list. Must be sent as a reply to the target list message.
+
+Examples:
+
+```text
+/delete
+/remove
+/delete@thelistingbot
+```
+
+Reply-based usage:
+
+1. Reply to the specific list message you want to delete
+2. Send `/delete` or `/remove`
+
+This supports multiple active lists in the same group because commands target the replied list.
+
 ## Reaction Controls (No Text Command Needed)
 
 After list creation, membership is controlled only with reactions on the list message:
